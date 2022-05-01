@@ -1,0 +1,8 @@
+<launch>
+	<node name="stage" pkg="stage_ros" type="stageros"
+	      args="$(find lab8)/world/playground.world" />
+	<param name="goalx" value="4"/>
+	<param name="goaly" value="9"/>
+	<node name="navigator" pkg="lab8" type="navigator.py"/>
+	<node name="walker" pkg="lab8" type="walker.py" output="screen"/>
+</launch>
