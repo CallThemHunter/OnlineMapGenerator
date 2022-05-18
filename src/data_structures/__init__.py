@@ -1,1 +1,3 @@
-#! /usr/bin/env python3
+from .rstar import RStarTree
+
+__all__ = ['RStarTree']
