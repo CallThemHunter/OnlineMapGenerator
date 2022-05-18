@@ -11,8 +11,8 @@ class FuzzyCluster:
         # data via that.
         self.data = data
         self.membership = np.concatenate(
-            np.ones((1, membership)),
-            np.zeros((1, len(self.data)-membership)))
+            [np.ones((1, membership)),
+             np.zeros((1, len(self.data)-membership))])
 
     def __str__(self):
         out = ""
@@ -116,14 +116,14 @@ class FuzzyClustering:
         #  assign all data to first cluster
         self.clusters[0].data = np.concatenate(
             self.clusters[0].data, data)
-        self.clusters[0].membership = np.concatenate(
-            self.clusters[0].membership, np.ones((1, len(data))))
+        self.clusters[0].membership = np.concatenate([self.clusters[0].membership,
+                                                      np.ones((1, len(data)))])
 
         # update remaining clusters
         for cluster in self.clusters[1:]:
-            cluster.data = np.concatenate(cluster.data, data)
-            cluster.membership = np.concatenate(
-                cluster.membership, np.zeros((1, len(data))))
+            cluster.data = np.concatenate([cluster.data, data])
+            cluster.membership = np.concatenate([cluster.membership,
+                                                 np.zeros((1, len(data)))])
 
     def reduce(self, resolution: int):
         """
@@ -132,6 +132,7 @@ class FuzzyClustering:
         """
         def distance(p1: NDArray, p2: NDArray):
             return (np.sum(np.square(np.subtract(p1, p2))))**0.5
+        pass
 
     def reduce_lossy(self, n=400, k=0.7):
         """
