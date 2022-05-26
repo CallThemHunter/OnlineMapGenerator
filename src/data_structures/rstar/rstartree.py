@@ -18,10 +18,17 @@ from numpy.typing import NDArray
 
 from .boundingbox import BoundingBox, Point
 
+
 eps = 0.001
 
 
 # noinspection SpellCheckingInspection
+def create_sc_bounds(bbs_sorted: List[BoundingBox], idx: int) -> \
+        List[BoundingBox]:
+    sc = [bbs_sorted[:idx], bbs_sorted[idx:]]
+    return [BoundingBox.create(sc[0]), BoundingBox.create(sc[1])]
+
+
 class RSNode:
     def __init__(self, parent, tree: 'RStarTree'):
         # used to access global parameters
@@ -38,8 +45,10 @@ class RSNode:
         self._success = False
 
     def __repr__(self):
-        return self.bounds.__repr__() + ", leaf: " \
-               + str(self.is_leaf) + ", children: " + str(len(self.children))
+        return "Node(" + self.bounds.__repr__() \
+               + ", leaf: " + str(self.is_leaf) \
+               + ", children: " + str(len(self.children)) \
+               + ")"
 
     @property
     def height(self):
@@ -77,9 +86,22 @@ class RSNode:
 
     # main interaction methods
 
-    def query(self, element: BoundingBox) -> bool:
-        # TODO query (high priority)
-        pass
+    def query(self, element: BoundingBox) -> \
+            List[Union[BoundingBox, Point]]:
+        if self.is_leaf:
+            # report all object intersecting with element
+            out: List[Union[BoundingBox, Point]] = []
+            for child in self.children:
+                # if 2 bounding boxes overlap
+                if element.overlap(child) is not None:
+                    out += [child]
+            return out
+        else:
+            out: List[Union[BoundingBox, Point]] = []
+            for child in self.children:
+                if element.overlap(self.bounds) is not None:
+                    out += child.query(element)
+            return out
 
     def insert(self, element: BoundingBox) -> None:
         """
@@ -95,8 +117,13 @@ class RSNode:
         if self.is_leaf:
             if self.is_overfilled:
                 self._split()
-                self.parent.insert(element)
+
+                if not self.is_root:
+                    self.parent.insert(element)
+                else:
+                    self.__tree.root.insert(element)
                 return
+
             else:
                 # should only happen a few times!
                 # (may happen if elements are removed from a node)
@@ -115,8 +142,13 @@ class RSNode:
             # insert to child node
             if self.is_overfilled:
                 self._split()
-                self.parent.insert(element)
+
+                if not self.is_root:
+                    self.parent.insert(element)
+                else:
+                    self.__tree.root.insert(element)
                 return
+
             else:
                 child = self._choose_subtree(element)
                 child.insert(element)
@@ -228,7 +260,6 @@ class RSNode:
             return c
         else:
             return E[np.argmin(del_overlap)]
-
     ##########################
     # choose subtree functions.
 
@@ -252,15 +283,19 @@ class RSNode:
 
     def _split(self) -> None:
         """
-        splits the current node. if root, will unseat current tree's root
+        splits the current node upward. if root, will unseat current tree's root
         :return: None
         """
         new_nodes = self._split_in_two()
 
-        new_nodes[0].bounds = BoundingBox.create(
-            [child.bounds for child in new_nodes[0].children])
-        new_nodes[1].bounds = BoundingBox.create(
-            [child.bounds for child in new_nodes[1].children])
+        if new_nodes[0].is_leaf:
+            new_nodes[0].bounds = BoundingBox.create(new_nodes[0].children)
+            new_nodes[1].bounds = BoundingBox.create(new_nodes[1].children)
+        else:
+            new_nodes[0].bounds = BoundingBox.create(
+                [child.bounds for child in new_nodes[0].children])
+            new_nodes[1].bounds = BoundingBox.create(
+                [child.bounds for child in new_nodes[1].children])
 
         new_nodes[0].o_box = new_nodes[0].bounds
         new_nodes[1].o_box = new_nodes[1].bounds
@@ -273,6 +308,14 @@ class RSNode:
 
             new_nodes[0].parent = new_root
             new_nodes[1].parent = new_root
+
+            if not new_nodes[0].is_leaf:
+                for child in new_nodes[0].children:
+                    child.parent = new_nodes[0]
+
+            if not new_nodes[1].is_leaf:
+                for child in new_nodes[1].children:
+                    child.parent = new_nodes[1]
 
             new_root.children = new_nodes
 
@@ -309,21 +352,35 @@ class RSNode:
 
         # check direction
         if best[1]:
-            node_sort = sorted(self.children, key=lambda node: node.bottoms[dim])
+            if self.is_leaf:
+                node_sort = sorted(self.children, key=lambda bbox: bbox.bottoms[dim])
+            else:
+                node_sort = sorted(self.children, key=lambda node: node.bounds.bottoms[dim])
         else:
-            node_sort = sorted(self.children, key=lambda node: node.tops[dim])
+            if self.is_leaf:
+                node_sort = sorted(self.children, key=lambda bbox: bbox.tops[dim])
+            else:
+                node_sort = sorted(self.children, key=lambda node: node.bounds.tops[dim])
 
-        new_nodes[0].children = node_sort[:best[0]]
-        new_nodes[1].children = node_sort[best[0]:]
+        new_nodes[0].children = node_sort[:best[0] + self.__lower]
+        new_nodes[1].children = node_sort[best[0] + self.__lower:]
 
         return new_nodes
 
-    def __sort_nodes_over(self, dim: int) -> Tuple[List[BoundingBox], List[BoundingBox]]:
-        top_nodes = sorted(self.children, key=lambda node: node.tops[dim])
-        bot_nodes = sorted(self.children, key=lambda node: node.bottoms[dim])
+    def __sort_nodes_over(self, dim: int) -> \
+            Tuple[List[BoundingBox], List[BoundingBox]]:
+        top_nodes = sorted(self.children, key=lambda node: node.bounds.tops[dim])
+        bot_nodes = sorted(self.children, key=lambda node: node.bounds.bottoms[dim])
 
         top_bbs = list(map(lambda rnode: rnode.bounds, top_nodes))
         bot_bbs = list(map(lambda rnode: rnode.bounds, bot_nodes))
+        return top_bbs, bot_bbs
+
+    def __sort_bounds_over(self, dim: int) -> \
+            Tuple[List[BoundingBox], List[BoundingBox]]:
+        top_bbs = sorted(self.children, key=lambda bbox: bbox.tops[dim])
+        bot_bbs = sorted(self.children, key=lambda bbox: bbox.bottoms[dim])
+
         return top_bbs, bot_bbs
 
     def __determine_dim(self) -> int:
@@ -334,14 +391,14 @@ class RSNode:
         """
         best = None
         for dim in range(self.bounds.tops.shape[0]):
-            top_bbs, bot_bbs = self.__sort_nodes_over(dim)
+            top_bbs, bot_bbs = self.__sort_bounds_over(dim)
 
             sc_i: List[List[BoundingBox]] = []
             for idx in range(self.__lower, self.__upper - self.__lower + 1):
-                sc = self.__create_sc_bounds(top_bbs, idx)
+                sc = create_sc_bounds(top_bbs, idx)
                 sc_i += [sc[0].margin + sc[1].margin]
 
-                sc = self.__create_sc_bounds(bot_bbs, idx)
+                sc = create_sc_bounds(bot_bbs, idx)
                 sc_i += [sc[0].margin + sc[1].margin]
 
             minimum = np.argmin(sc_i)
@@ -358,22 +415,23 @@ class RSNode:
         """
 
         # always assume you are in the node that is being split!
-        max_perim = self.bounds.margin * 2 - np.min(self.bounds.bottoms)
+        max_perim = self.bounds.margin - np.min(self.bounds.bottoms)
 
-        top_bbs, bot_bbs = self.__sort_nodes_over(dim)
+        if self.is_leaf:
+            top_bbs, bot_bbs = self.__sort_bounds_over(dim)
+        else:
+            top_bbs, bot_bbs = self.__sort_nodes_over(dim)
 
         sc_i_list: List[List[List[BoundingBox]]] = []
         for idx in range(self.__lower, self.__upper - self.__lower + 1):
-            sc_i_list += [[self.__create_sc_bounds(top_bbs, idx),
-                           self.__create_sc_bounds(bot_bbs, idx)]]
+            sc_i_list += [[create_sc_bounds(top_bbs, idx),
+                           create_sc_bounds(bot_bbs, idx)]]
 
         # dim 0: different split indexes
         # dim 1: top vs bottom
         # dim 2: sc_1, sc_2
 
         wf = self.__compute_wf(dim)
-
-        # TODO test this
 
         # outer apply: over different split indexes
         # inner apply: over different bounding box positions
@@ -384,45 +442,62 @@ class RSNode:
             for split in side_list:
                 margin_sc[-1] += [split[0].margin + split[1].margin]
 
+        # TODO if there are ties for best margin, choose by best area
+
         # overlap of bounding box pairs sc_1 and sc_2
         overlap_sc: List[List[BoundingBox]] = []
         for side_list in sc_i_list:
             overlap_sc += [[]]
             for split in side_list:
-                overlap_sc[-1] += BoundingBox.overlap_sc(split[0], split[1])
+                overlap_sc[-1] += [BoundingBox.overlap_of(split[0], split[1])]
 
         # margin of overlap of box pairs
         margin_overlap_sc: List[List[float]] = []
         for side_list in overlap_sc:
+            margin_ovlp_sc_1 = 0
+            margin_ovlp_sc_2 = 0
+            if side_list[0] is not None:
+                margin_ovlp_sc_1 = side_list[0].margin
+            if side_list[1] is not None:
+                margin_ovlp_sc_2 = side_list[1].margin
             margin_overlap_sc += [[
-                side_list[0].margin,
-                side_list[1].margin
+                margin_ovlp_sc_1,
+                margin_ovlp_sc_2
             ]]
 
-        wg: NDArray = np.multiply(margin_sc - max_perim, wf)
-        wg_alt: NDArray = np.divide(margin_overlap_sc, wf)
+        margin_sc: NDArray = np.array(margin_sc)
+        wg: NDArray = np.zeros(margin_sc.shape)
+        wg[:, 0] = np.multiply(margin_sc[:, 0] - max_perim, wf)
+        wg[:, 1] = np.multiply(margin_sc[:, 1] - max_perim, wf)
 
-        indexes = np.abs(margin_overlap_sc) < eps
-        wg = np.put(wg, indexes, wg_alt[indexes])
+        margin_overlap_sc: NDArray = np.array(margin_overlap_sc)
+        wg_alt: NDArray = np.zeros(margin_overlap_sc.shape)
+        wg_alt[:, 0] = np.divide(margin_overlap_sc[:, 0], wf)
+        wg_alt[:, 1] = np.divide(margin_overlap_sc[:, 1], wf)
+
+        indexes = np.abs(margin_overlap_sc) > eps
+        np.putmask(wg, indexes, wg_alt[indexes])
+
         # should give the best split candidate
         split, direction = np.unravel_index(np.argmin(wg), wg.shape)
-        return sc_i_list[split][direction]
+
+        return split, direction, wg[split, direction]
 
     def __compute_wf(self, dim: int) -> List[float]:
         # how much the bbox has become lopsided along
         # dimension dim, relative to where it started
         asym = self.bounds.asymmetry(self.o_box, dim)
 
-        mean = (1 - self.__lower / (self.__upper + 1)) * asym
+        mean = (1 - 2 * self.__lower / (self.__upper + 1)) * asym
         sigma = self.__shape * (1 + np.abs(mean))
 
         # y offset
         y1 = math.exp(-1 / (self.__shape ** 2))
         # y scaling
         ys = 1 / (1 - y1)
-        num = 2 * np.arange(self.__lower,
-                            self.__upper - self.__lower + 1)
-        xi = num / (self.__upper + 1) - 1
+        num = np.arange(self.__lower,
+                        self.__upper - self.__lower + 1)
+        xi = 2 * num / self.__upper - 1
 
         z_score = (xi - mean) / sigma
         wf = ys * (np.exp(-1 * (z_score ** 2)) - y1)
@@ -441,12 +516,6 @@ class RSNode:
     def __shape(self):
         return self.__tree.shape
 
-    @staticmethod
-    def __create_sc_bounds(bbs_sorted: List[BoundingBox], idx: int) -> \
-            List[BoundingBox]:
-        sc = [bbs_sorted[:idx], bbs_sorted[idx:]]
-        return [BoundingBox.create(sc[0]), BoundingBox.create(sc[1])]
-
 
 class RStarTree:
     def __init__(self, lower=4, upper=50, shape=0.5):
@@ -463,7 +532,7 @@ class RStarTree:
         # (the tree can only grow in depth from the root, which makes it easier)
 
     def __repr__(self):
-        return self.root.__repr__()
+        return "Tree: Root(" + self.root.__repr__() + ")"
 
     # getters
     @property
@@ -482,8 +551,11 @@ class RStarTree:
     def height(self):
         return self.root.height
 
-    def query(self, element: BoundingBox) -> bool:
-        # check if present
+    def query(self, element: BoundingBox) -> \
+            List[Union[BoundingBox, Point]]:
+        """
+        returns all elements intersecting with given bounding box
+        """
         return self.root.query(element)
 
     # setters
@@ -497,22 +569,3 @@ class RStarTree:
     def nearest_neighbor(self, element: BoundingBox, k=1) -> \
             List[BoundingBox]:
         pass
-
-
-if __name__ == "__main__":
-    rtree = RStarTree(lower=1, upper=4)
-    cnode_1 = RSNode(rtree.root, rtree)
-    cnode_1.insert(Point(np.array([3, 5])))
-    cnode_2 = RSNode(rtree.root, rtree)
-    cnode_2.insert(Point(np.array([9, 2])))
-    rtree.root.children = [cnode_1, cnode_2]
-
-    rtree.insert(Point(np.array([1, 2])))
-    rtree.insert(Point(np.array([2, 3])))
-    rtree.insert(Point(np.array([4, 1])))
-    rtree.insert(Point(np.array([3, 9])))
-    rtree.insert(Point(np.array([4, 7])))
-    rtree.insert(Point(np.array([6, 3])))
-    rtree.insert(Point(np.array([9, 5])))
-    rtree.insert(Point(np.array([5, 4])))
-    rtree.insert(Point(np.array([3, 5])))
